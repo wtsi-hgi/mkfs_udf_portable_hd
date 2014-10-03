@@ -124,8 +124,8 @@ if (defined $ARGV[0]) {
 
 # TODO: get sector_size argument
 
-# if we have diskutil, use it to get block size and disk size
 if (-x "/usr/sbin/diskutil") {
+    # if we have diskutil, use it to get block size and disk size
     my $diskutil_info = `/usr/sbin/diskutil info $dev`;
     if ($diskutil_info =~ m/\s*Device\s+Block\s+Size:\s+([0-9]+)\s+Bytes/) {
 	$sector_size = $1;
@@ -133,33 +133,55 @@ if (-x "/usr/sbin/diskutil") {
     if ($diskutil_info =~ m/\s*Total\s+Size:.*?([0-9]+)\s+Bytes/) {
 	$size = $1;
     }
-}
+} elsif (-e "/sys/block") {
+    # if we are on linux, get information from /sys/block
+    my $blockdir = $dev;
+    $blockdir =~ s/.*\///;
+    my $pbs_file = "/sys/block/$blockdir/queue/physical_block_size";
+    my $size_file = "/sys/block/$blockdir/size";
+    if (-e $pbs_file) {
+	open(PBSFILE, "<", $pbs_file) or die "cannot open $pbs_file for reading\n";
+	$sector_size = <PBSFILE>;
+	chomp $sector_size;
+	close(PBSFILE);
+    }
+    if (-e $size_file) {
+	open(SIZEFILE, "<", $size_file) or die "cannot open $size_file for reading\n";
+	my $sectors = <SIZEFILE>;
+	chomp $sectors;
+	$size = $sectors * 512; # /sys/block/*/size always returns size in count of 512-byte sectors
+	close(SIZEFILE);
+    }
+} else {
+    # assume 512-byte sectors and try to determine disk size empircally
 
-# TODO: add lshw check
+    # open disk device or die
+    open(DISK, "<", $dev) || die "Cannot open '$dev' for reading: $!\n";
+    
+    # if we don't have size yet, try determining with sysseek
+    if ($size <= 0) {
+	$size = sysseek(DISK, 0, SEEK_END);
+	sysseek(DISK, 0, SEEK_SET);
+    }
+    
+    # if we don't have size yet, try determining with seek/tell
+    if ($size <= 0) {
+	seek(DISK, 0, SEEK_END) || die "Cannot seek to end of device: $!\n";
+	$size = tell(DISK);
+    }
+    close(DISK) || die "Cannot close device: $!\n";
+    
+    # if we still don't have size, try one last time with -s
+    if ($size <= 0) {
+	$size = (-s $dev);
+    } 
+    
+    # give up if we don't have size
+    die "Cannot find device size, please use: $0 device label [size_in_bytes]\n" unless ($size > 0);
+}
 
 # open disk device or die
 open(DISK, "+<", $dev) || die "Cannot open '$dev' read/write: $!\n";
-
-# if we don't have size yet, try determining with sysseek
-if ($size <= 0) {
-    $size = sysseek(DISK, 0, SEEK_END);
-    sysseek(DISK, 0, SEEK_SET);
-}
-
-# if we don't have size yet, try determining with seek/tell
-if ($size <= 0) {
-    seek(DISK, 0, SEEK_END) || die "Cannot seek to end of device: $!\n";
-    $size = tell(DISK);
-}
-seek(DISK, 0, SEEK_SET) || die "Cannot seek to begin of device: $!\n";
-
-# if we still don't have size, try one last time with -s
-if ($size <= 0) {
-    $size = (-s $dev);
-} 
-
-# give up if we don't have size
-die "Cannot find device size, please use: $0 device label [size_in_bytes]\n" unless ($size > 0);
 
 print "Writing MBR...";
 my ($mbr, $maxlba) = generate_fmbr($size/$sector_size, 255, 63, $PART_TYPE);
@@ -174,7 +196,7 @@ print "done!\n";
 
 close(DISK) || die "Cannot close disk device: $!\n";
 
-print "Creating $maxlba-sector UDF v2.01 filesystem with label '$label' on $dev using $udftype...\n";
+print "Creating $maxlba-sector UDF v2.01 filesystem with label '$label' on $dev with $sector_size bytes per sector using $udftype...\n";
 if ($udftype eq "mkudffs") {
     system($udfpath, "--blocksize=$sector_size", "--udfrev=0x0201", "--lvid=$label", "--vid=$label", "--media-type=hd", "--utf8", $dev, $maxlba);
 } elsif ($udftype eq "newfs_udf") {
