@@ -29,6 +29,7 @@ use warnings;
 use Fcntl qw(SEEK_SET SEEK_END);
 
 my $SECTORSIZE = 512;
+my $PART_TYPE = 0x0B;
 
 sub encode_lba {
     my ($lba) = @_;
@@ -44,23 +45,23 @@ sub encode_chs {
     }
     my $S = 1 + ($lba % $sects);
     my $H = ($lba / $sects) % $heads;
-    my $res = pack("WWW", $H & 255, (($S & 63) | ((($C / 256) & 3) * 64)), $C & 255);
+    my $res = pack("CCC", $H & 255, (($S & 63) | ((($C / 256) & 3) * 64)), $C & 255);
     return $res;
 }
 
 sub encode_entry {
     my ($begin_sect, $size_sect, $bootable, $type, $heads, $sects) = @_;
     if ($size_sect == 0) {
-	return (pack("W", 0) x 16);
+	return (pack("C", 0) x 16);
     }
     my $res = "";
     if ($bootable) { 
-	$res = pack("W", 0x80); 
+	$res = pack("C", 0x80); 
     } else { 
-	$res = pack("W", 0); 
+	$res = pack("C", 0); 
     }
     $res .= encode_chs($begin_sect, $heads, $sects);
-    $res .= pack("W", $type);
+    $res .= pack("C", $type);
     $res .= encode_chs($begin_sect+$size_sect-1, $heads, $sects);
     $res .= encode_lba($begin_sect);
     $res .= encode_lba($size_sect);
@@ -69,15 +70,15 @@ sub encode_entry {
 
 sub generate_fmbr {
     use integer;
-    my ($maxlba, $heads, $sects) = @_;
+    my ($maxlba, $heads, $sects, $type) = @_;
     $maxlba -= ($maxlba % ($heads * $sects));
-    my $res = pack("W", 0) x 440; # code section
+    my $res = pack("C", 0) x 440; # code section
     $res .= pack("V", 0);       # disk signature
-    $res .= pack("W", 0) x 2;   # padding
-    $res .= encode_entry(0, $maxlba, 0, 0x0B, $heads, $sects); # primary partition spanning whole disk
-    $res .= pack("W", 0) x 48;  # 3 unused partition entries
-    $res .= pack("W", 0x55);    # signature part 1
-    $res .= pack("W", 0xAA);    # signature part 2
+    $res .= pack("C", 0) x 2;   # padding
+    $res .= encode_entry(0, $maxlba, 0, $type, $heads, $sects); # primary partition spanning whole disk
+    $res .= pack("C", 0) x 48;  # 3 unused partition entries
+    $res .= pack("C", 0x55);    # signature part 1
+    $res .= pack("C", 0xAA);    # signature part 2
     return ($res, $maxlba);
 }
 
@@ -127,13 +128,13 @@ if ($size <= 0) {
 }
 
 print "Writing MBR...";
-my ($mbr, $maxlba) = generate_fmbr($size/$SECTORSIZE, 255, 63);
+my ($mbr, $maxlba) = generate_fmbr($size/$SECTORSIZE, 255, 63, $PART_TYPE);
 print DISK $mbr || die "Cannot write MBR: $!\n";
 print "done!\n";
 
 print "Cleaning first 4096 sectors...";
 for (my $i=1; $i<4096; $i++) {
-    print DISK (pack("W",0) x $SECTORSIZE) || die "Cannot clear sector $i: $!\n";
+    print DISK (pack("C",0) x $SECTORSIZE) || die "Cannot clear sector $i: $!\n";
 }
 print "done!\n";
 
