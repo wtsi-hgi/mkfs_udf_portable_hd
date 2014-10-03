@@ -28,7 +28,6 @@ use strict;
 use warnings;
 use Fcntl qw(SEEK_SET SEEK_END);
 
-my $SECTORSIZE = 512;
 my $PART_TYPE = 0x0B;
 
 sub encode_lba {
@@ -107,34 +106,69 @@ if (! defined($udftype)) {
 my $dev = shift @ARGV;
 my $label = shift @ARGV || "UDF";
 
-open(DISK, "+<", $dev) || die "Cannot open '$dev' read/write (perhaps you need to sudo?): $!\n";
+die "device $dev does not exist!\n" unless (-e $dev);
+die "device $dev not a block device!\n" unless (-b $dev);
+die "device $dev not readable\n" unless (-r $dev);
+die "device $dev not writeable (perhaps try sudo?)\n" unless (-w $dev);
+
+# default sector size is 512 unless we know otherwise
+my $sector_size = 512;
+
+# try getting size with -s
 my $size = (-s $dev);
+
+# if size was specified as argument, set it
 if (defined $ARGV[0]) {
     $size = shift @ARGV;
 }
-if ($size <= 0) {
-    $size = sysseek(DISK, 0, 2);
-    sysseek(DISK, 0, 0);
+
+# TODO: get sector_size argument
+
+# if we have diskutil, use it to get block size and disk size
+if (-x "/usr/sbin/diskutil") {
+    my $diskutil_info = `/usr/sbin/diskutil info $dev`;
+    if ($diskutil_info =~ m/\s*Device\s+Block\s+Size:\s+([0-9]+)\s+Bytes/) {
+	$sector_size = $1;
+    }
+    if ($diskutil_info =~ m/\s*Total\s+Size:.*?([0-9]+)\s+Bytes/) {
+	$size = $1;
+    }
 }
+
+# TODO: add lshw check
+
+# open disk device or die
+open(DISK, "+<", $dev) || die "Cannot open '$dev' read/write: $!\n";
+
+# if we don't have size yet, try determining with sysseek
+if ($size <= 0) {
+    $size = sysseek(DISK, 0, SEEK_END);
+    sysseek(DISK, 0, SEEK_SET);
+}
+
+# if we don't have size yet, try determining with seek/tell
 if ($size <= 0) {
     seek(DISK, 0, SEEK_END) || die "Cannot seek to end of device: $!\n";
-    my $size = tell(DISK);
+    $size = tell(DISK);
 }
 seek(DISK, 0, SEEK_SET) || die "Cannot seek to begin of device: $!\n";
 
-$size = (-s $dev) if ($size <= 0);
+# if we still don't have size, try one last time with -s
 if ($size <= 0) {
-    die "Cannot calculate device size, please use: $0 device label [size_in_bytes]\n";
-}
+    $size = (-s $dev);
+} 
+
+# give up if we don't have size
+die "Cannot find device size, please use: $0 device label [size_in_bytes]\n" unless ($size > 0);
 
 print "Writing MBR...";
-my ($mbr, $maxlba) = generate_fmbr($size/$SECTORSIZE, 255, 63, $PART_TYPE);
+my ($mbr, $maxlba) = generate_fmbr($size/$sector_size, 255, 63, $PART_TYPE);
 print DISK $mbr || die "Cannot write MBR: $!\n";
 print "done!\n";
 
 print "Cleaning first 4096 sectors...";
-for (my $i=1; $i<4096; $i++) {
-    print DISK (pack("C",0) x $SECTORSIZE) || die "Cannot clear sector $i: $!\n";
+for (my $i=1; $i < 4096; $i++) {
+    print DISK (pack("C",0) x $sector_size) || die "Cannot clear sector $i: $!\n";
 }
 print "done!\n";
 
@@ -142,7 +176,7 @@ close(DISK) || die "Cannot close disk device: $!\n";
 
 print "Creating $maxlba-sector UDF v2.01 filesystem with label '$label' on $dev using $udftype...\n";
 if ($udftype eq "mkudffs") {
-    system($udfpath, "--blocksize=$SECTORSIZE", "--udfrev=0x0201", "--lvid=$label", "--vid=$label", "--media-type=hd", "--utf8", $dev, $maxlba);
+    system($udfpath, "--blocksize=$sector_size", "--udfrev=0x0201", "--lvid=$label", "--vid=$label", "--media-type=hd", "--utf8", $dev, $maxlba);
 } elsif ($udftype eq "newfs_udf") {
-    system($udfpath, "-b", $SECTORSIZE, "-m", "blk", "-t", "ow", "-s", $maxlba, "-r", "2.01", "-v", $label, "--enc", "utf8", $dev);
+    system($udfpath, "-b", $sector_size, "-m", "blk", "-t", "ow", "-s", $maxlba, "-r", "2.01", "-v", $label, "--enc", "utf8", $dev);
 }
