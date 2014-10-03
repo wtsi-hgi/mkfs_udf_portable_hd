@@ -1,4 +1,5 @@
 #!/usr/bin/env perl
+#
 #    mkfs_udf_portable_hd.pl - partition and format a hard disk using UDF
 #    accessible by Linux, Mac, and Windows systems
 #
@@ -26,16 +27,40 @@
 
 use strict;
 use warnings;
-use Fcntl qw(SEEK_SET SEEK_END);
+use Getopt::Long;
+use Pod::Usage;
 
-my $PART_TYPE = 0x0B;
+# option defaults
+my $part_type = 0x0B;
+my $label = "UDF";
+my $size = 0;
+my $sector_size = 512;
+my $man = 0;
+my $help = 0;
 
+# get command-line options
+my $result = GetOptions(
+    "part_type=s"   => \$part_type,
+    "label=s"       => \$label,
+    "size=i"        => \$size,
+    "sector_size=i" => \$sector_size,
+    "help|?"        => \$man,
+    ) or pod2usage(2);
+
+pod2usage(1) if $help;
+pos2usage(-exitval => 0, -verbose => 2) if $man;
+
+# get command-line argument
+my $dev = shift @ARGV || pod2usage(2);
+
+# Encode a Logical Block Address (LBA) 
 sub encode_lba {
     my ($lba) = @_;
     my $res = pack("V", $lba);
     return $res;
 }
 
+# Encode Cylinder-Head-Sector (CHS)
 sub encode_chs {
     my ($lba, $heads, $sects) = @_;
     my $C = $lba / ($heads * $sects);
@@ -48,6 +73,7 @@ sub encode_chs {
     return $res;
 }
 
+# Encode a partition-table entry
 sub encode_entry {
     my ($begin_sect, $size_sect, $bootable, $type, $heads, $sects) = @_;
     if ($size_sect == 0) {
@@ -67,6 +93,7 @@ sub encode_entry {
     return $res;
 }
 
+# Generate Master Boot Record (MBR) for disk
 sub generate_fmbr {
     use integer;
     my ($maxlba, $heads, $sects, $type) = @_;
@@ -81,13 +108,7 @@ sub generate_fmbr {
     return ($res, $maxlba);
 }
 
-# autoflush STDOUT
-$ |= 1;
-
-if (! -e $ARGV[0]) {
-    print "Syntax: $0 /dev/diskdevice [label] [size_in_bytes]\n"
-}
-
+# determine which tool to use (mkudffs on Linux, newfs_udf on Mac)
 my $udfpath = "";
 my $udftype;
 if (-x "/usr/bin/mkudffs") { 
@@ -103,26 +124,10 @@ if (! defined($udftype)) {
     die "Neither mkudffs or newfs_udf could be found.\n";
 }
 
-my $dev = shift @ARGV;
-my $label = shift @ARGV || "UDF";
-
 die "device $dev does not exist!\n" unless (-e $dev);
 die "device $dev not a block device!\n" unless (-b $dev);
 die "device $dev not readable\n" unless (-r $dev);
 die "device $dev not writeable (perhaps try sudo?)\n" unless (-w $dev);
-
-# default sector size is 512 unless we know otherwise
-my $sector_size = 512;
-
-# try getting size with -s
-my $size = (-s $dev);
-
-# if size was specified as argument, set it
-if (defined $ARGV[0]) {
-    $size = shift @ARGV;
-}
-
-# TODO: get sector_size argument
 
 if (-x "/usr/sbin/diskutil") {
     # if we have diskutil, use it to get block size and disk size
@@ -153,52 +158,66 @@ if (-x "/usr/sbin/diskutil") {
 	close(SIZEFILE);
     }
 } else {
-    # assume 512-byte sectors and try to determine disk size empircally
+    # assume default sector_size and try to determine disk size empirically
 
-    # open disk device or die
-    open(DISK, "<", $dev) || die "Cannot open '$dev' for reading: $!\n";
+    # try getting size with -s
+    $size = (-s $dev);
     
-    # if we don't have size yet, try determining with sysseek
+    # if we don't have nonzero size yet, try determining with sysseek
     if ($size <= 0) {
+	use Fcntl qw(SEEK_SET SEEK_END);
+	open(DISK, "<", $dev) || die "Cannot open '$dev' for reading: $!\n";
 	$size = sysseek(DISK, 0, SEEK_END);
 	sysseek(DISK, 0, SEEK_SET);
     }
     
-    # if we don't have size yet, try determining with seek/tell
+    # if we don't have nonzero size yet, try determining with seek/tell
     if ($size <= 0) {
 	seek(DISK, 0, SEEK_END) || die "Cannot seek to end of device: $!\n";
 	$size = tell(DISK);
     }
     close(DISK) || die "Cannot close device: $!\n";
     
-    # if we still don't have size, try one last time with -s
+    # if we still don't have nonzero size, try one last time with -s
     if ($size <= 0) {
 	$size = (-s $dev);
     } 
     
-    # give up if we don't have size
+    # give up if we don't have nonzero size
     die "Cannot find device size, please use: $0 device label [size_in_bytes]\n" unless ($size > 0);
 }
 
-# open disk device or die
+# autoflush STDOUT
+$ |= 1;
+
+# open disk device R/W or die
 open(DISK, "+<", $dev) || die "Cannot open '$dev' read/write: $!\n";
 
 print "Writing MBR...";
-my ($mbr, $maxlba) = generate_fmbr($size/$sector_size, 255, 63, $PART_TYPE);
+my ($mbr, $maxlba) = generate_fmbr($size/$sector_size, 255, 63, $part_type);
 print DISK $mbr || die "Cannot write MBR: $!\n";
 print "done!\n";
 
 print "Cleaning first 4096 sectors...";
 for (my $i=1; $i < 4096; $i++) {
     print DISK (pack("C",0) x $sector_size) || die "Cannot clear sector $i: $!\n";
+    if ($i % 128 == 0) {
+	print ".";
+    }
 }
 print "done!\n";
 
 close(DISK) || die "Cannot close disk device: $!\n";
 
-print "Creating $maxlba-sector UDF v2.01 filesystem with label '$label' on $dev with $sector_size bytes per sector using $udftype...\n";
+my @udfargs; 
 if ($udftype eq "mkudffs") {
-    system($udfpath, "--blocksize=$sector_size", "--udfrev=0x0201", "--lvid=$label", "--vid=$label", "--media-type=hd", "--utf8", $dev, $maxlba);
+    @udfargs = ($udfpath, "--blocksize=$sector_size", "--udfrev=0x0201", "--lvid=$label", "--vid=$label", "--media-type=hd", "--utf8", $dev, $maxlba);
 } elsif ($udftype eq "newfs_udf") {
-    system($udfpath, "-b", $sector_size, "-m", "blk", "-t", "ow", "-s", $maxlba, "-r", "2.01", "-v", $label, "--enc", "utf8", $dev);
+    @udfargs = ($udfpath, "-b", $sector_size, "-m", "blk", "-t", "ow", "-s", $maxlba, "-r", "2.01", "-v", $label, "--enc", "utf8", $dev);
 }
+
+print "Calling $udftype...";
+system(@udfargs) == 0 or die "$udftype failed: $?\n";
+print "done!\n";
+
+print "Created $maxlba-sector UDF v2.01 filesystem with label '$label' on $dev with $sector_size bytes per sector (total $size bytes).\n";
