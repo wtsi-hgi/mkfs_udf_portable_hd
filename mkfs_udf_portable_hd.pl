@@ -30,6 +30,12 @@ use warnings;
 use Getopt::Long;
 use Pod::Usage;
 
+=head1 NAME
+
+mkfs_udf_portable_hd.pl - format a portable hard drive
+
+=cut
+
 # option defaults
 my $part_type = 0x0B;
 my $label = "UDF";
@@ -38,17 +44,72 @@ my $sector_size = 512;
 my $man = 0;
 my $help = 0;
 
+=head1 SYNOPSIS
+
+mkfs_udf_portable_hd.pl [options] <DEVICE>
+
+=cut
+
 # get command-line options
 my $result = GetOptions(
-    "part_type=s"   => \$part_type,
+    "part_type=o"   => \$part_type,
     "label=s"       => \$label,
     "size=i"        => \$size,
     "sector_size=i" => \$sector_size,
-    "help|?"        => \$man,
+    "help|?"        => \$help,
+    "man"           => \$man,
     ) or pod2usage(2);
+pod2usage(-exitval => 0, -verbose => 0) if $help;
+pod2usage(-exitval => 0, -verbose => 2) if $man;
 
-pod2usage(1) if $help;
-pos2usage(-exitval => 0, -verbose => 2) if $man;
+=pod
+
+ Options:
+   --part_type <BYTE>   type of partition
+   --label <STR>        label for UDF volume
+   --size <INT>         size of disk in bytes
+   --sector_size <INT>  physical sector size
+   --help               brief help message
+   --man                full documentation
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<--part_type> <<BYTE>>
+
+Partition type (default: 0x0B)
+
+=item B<--label> <<STR>>
+
+Volume label for UDF filesystem (default: UDF)
+
+=item B<--size> <<INT>>
+
+Size of the disk (default: autodetected)
+
+=item B<--sector_size> <<INT>>
+
+Physical sector size of the disk 
+(default: autodetected with fallback to 512-byte sectors)
+
+=item B<--help>
+
+Prints a brief help message and exits.
+
+=item B<--man>
+
+Prints the manual page and exits.
+
+=back
+
+=head1 DESCRIPTION
+
+B<mkfs_udf_portable_hd.pl> formats a portable hard drive using the 
+Universal Disk Format (UDF) suitable for use across platforms.
+Should work on Linux, Mac, and Windows machines.
+
+=cut
 
 # get command-line argument
 my $dev = shift @ARGV || pod2usage(2);
