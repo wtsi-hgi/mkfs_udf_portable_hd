@@ -7,7 +7,14 @@ Windows systems.
 
 This script may be useful to you if you have a need for a portable 
 hard drive that can be accessed from multiple platforms and supports 
-large files (FAT32 works well but has a maximum 4GB file size). 
+large files (FAT32 works well but has a maximum 4GB file size). It 
+now supports newer portable hard drives with 4096 bytes per physical 
+sector. 
+
+`mkfs_udf_portable_hd.pl` requires either the `mkudffs` (Linux) or 
+`newfs_udf` (BSD / Darwin / Mac OS X) utility to actually create 
+the filesystem. On Ubuntu Linux, this is provided by the `udftools` 
+package. 
 
 This work is based on the `udfhd.pl` [script] [1]  by Pieter Wuille. 
 For more information on why this script is needed, please refer to 
